@@ -1,0 +1,418 @@
+import java.io.*;
+import java.util.*;
+
+// Abstract Person class
+abstract class Person {
+    protected String name;
+    protected String email;
+
+    public Person(String name, String email) {
+        this.name = name;
+        this.email = email;
+    }
+
+    public abstract void displayInfo();
+
+    public String getName() { return name; }
+    public String getEmail() { return email; }
+}
+
+// Student class
+class Student extends Person {
+    private int rollNo;
+    private String course;
+    private double marks;
+    private String grade;
+
+    public Student(int rollNo, String name, String email, String course, double marks) {
+        super(name, email);
+        this.rollNo = rollNo;
+        this.course = course;
+        setMarks(marks);
+        calculateGrade();
+    }
+
+    public int getRollNo() { return rollNo; }
+    public String getCourse() { return course; }
+    public double getMarks() { return marks; }
+    public String getGrade() { return grade; }
+
+    public void setCourse(String course) { this.course = course; }
+    public void setMarks(double marks) {
+        if (marks < 0 || marks > 100) throw new IllegalArgumentException("Marks must be between 0 and 100");
+        this.marks = marks;
+        calculateGrade();
+    }
+
+    public void setName(String name) { this.name = name; }
+    public void setEmail(String email) { this.email = email; }
+
+    public void calculateGrade() {
+        if (marks >= 85) grade = "A";
+        else if (marks >= 70) grade = "B";
+        else if (marks >= 50) grade = "C";
+        else grade = "F";
+    }
+
+    @Override
+    public void displayInfo() {
+        System.out.println("Roll No: " + rollNo);
+        System.out.println("Name: " + name);
+        System.out.println("Email: " + email);
+        System.out.println("Course: " + course);
+        System.out.println("Marks: " + marks);
+        System.out.println("Grade: " + grade);
+        System.out.println("----------------------------");
+    }
+
+    // Serialization to file line
+    public String toFileString() {
+        // rollNo|name|email|course|marks|grade
+        return rollNo + "|" + escape(name) + "|" + escape(email) + "|" + escape(course) + "|" + marks + "|" + grade;
+    }
+
+    public static Student fromFileString(String line) {
+        String[] parts = line.split("\\|", -1);
+        if (parts.length < 6) return null;
+        try {
+            int r = Integer.parseInt(parts[0]);
+            String name = unescape(parts[1]);
+            String email = unescape(parts[2]);
+            String course = unescape(parts[3]);
+            double marks = Double.parseDouble(parts[4]);
+            return new Student(r, name, email, course, marks);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String escape(String s) {
+        return s.replace("|", "\\|");
+    }
+    private static String unescape(String s) {
+        return s.replace("\\|", "|");
+    }
+}
+
+// Custom Exception
+class StudentNotFoundException extends Exception {
+    public StudentNotFoundException(String message) { super(message); }
+}
+
+// RecordActions interface
+interface RecordActions {
+    void addStudent(Student s) throws Exception;
+    void deleteStudentByName(String name) throws StudentNotFoundException;
+    void updateStudent(int rollNo) throws StudentNotFoundException;
+    Student searchStudentByName(String name) throws StudentNotFoundException;
+    List<Student> viewAllStudents();
+    void saveToFile() throws IOException;
+}
+
+// Loader class to simulate loading
+class Loader implements Runnable {
+    private String message;
+    private int millis;
+    private volatile boolean running = true;
+
+    public Loader(String message, int millis) {
+        this.message = message;
+        this.millis = millis;
+    }
+
+    public void stop() { running = false; }
+
+    @Override
+    public void run() {
+        System.out.print(message);
+        int dots = 0;
+        try {
+            while (running) {
+                System.out.print(".");
+                System.out.flush();
+                Thread.sleep(millis);
+                if (++dots % 10 == 0) {
+                    System.out.print("\r");
+                    for (int i = 0; i < message.length() + 10; i++) System.out.print(' ');
+                    System.out.print("\r" + message);
+                }
+            }
+        } catch (InterruptedException e) {
+            // thread interrupted
+        }
+        System.out.println();
+    }
+}
+
+// StudentManager implementation
+class StudentManager implements RecordActions {
+    private List<Student> students = new ArrayList<>();
+    private Map<Integer, Student> studentMap = new HashMap<>();
+    private final File storageFile;
+
+    public StudentManager(String filename) {
+        this.storageFile = new File(filename);
+        loadFromFile();
+    }
+
+    private void loadFromFile() {
+        if (!storageFile.exists()) return;
+        try (BufferedReader br = new BufferedReader(new FileReader(storageFile))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                Student s = Student.fromFileString(line);
+                if (s != null) {
+                    students.add(s);
+                    studentMap.put(s.getRollNo(), s);
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("Error loading students: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public synchronized void addStudent(Student s) throws Exception {
+        if (studentMap.containsKey(s.getRollNo()))
+            throw new Exception("Duplicate roll number: " + s.getRollNo());
+        students.add(s);
+        studentMap.put(s.getRollNo(), s);
+    }
+
+    @Override
+    public synchronized void deleteStudentByName(String name) throws StudentNotFoundException {
+        Iterator<Student> it = students.iterator();
+        boolean found = false;
+        while (it.hasNext()) {
+            Student s = it.next();
+            if (s.getName().equalsIgnoreCase(name)) {
+                it.remove();
+                studentMap.remove(s.getRollNo());
+                found = true;
+                break; // delete first match
+            }
+        }
+        if (!found) throw new StudentNotFoundException("Student with name '" + name + "' not found.");
+    }
+
+    @Override
+    public synchronized void updateStudent(int rollNo) throws StudentNotFoundException {
+        Student s = studentMap.get(rollNo);
+        if (s == null) throw new StudentNotFoundException("Student with rollNo " + rollNo + " not found.");
+        Scanner sc = new Scanner(System.in);
+        System.out.print("Enter new name (leave blank to keep): ");
+        String name = sc.nextLine().trim();
+        if (!name.isEmpty()) s.setName(name);
+        System.out.print("Enter new email (leave blank to keep): ");
+        String email = sc.nextLine().trim();
+        if (!email.isEmpty()) s.setEmail(email);
+        System.out.print("Enter new course (leave blank to keep): ");
+        String course = sc.nextLine().trim();
+        if (!course.isEmpty()) s.setCourse(course);
+        System.out.print("Enter new marks (or leave blank to keep): ");
+        String marksStr = sc.nextLine().trim();
+        if (!marksStr.isEmpty()) {
+            try {
+                double marks = Double.parseDouble(marksStr);
+                s.setMarks(marks);
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid marks input. Keeping old marks.");
+            }
+        }
+        System.out.println("Student updated.");
+    }
+
+    @Override
+    public synchronized Student searchStudentByName(String name) throws StudentNotFoundException {
+        for (Student s : students) {
+            if (s.getName().equalsIgnoreCase(name)) return s;
+        }
+        throw new StudentNotFoundException("Student with name '" + name + "' not found.");
+    }
+
+    @Override
+    public synchronized List<Student> viewAllStudents() {
+        return new ArrayList<>(students);
+    }
+
+    @Override
+    public synchronized void saveToFile() throws IOException {
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(storageFile))) {
+            for (Student s : students) {
+                bw.write(s.toFileString());
+                bw.newLine();
+            }
+        }
+    }
+
+    public synchronized void sortByMarksDesc() {
+        students.sort(Comparator.comparingDouble(Student::getMarks).reversed());
+    }
+}
+
+// Main public class
+public class StudentRecordSystem {
+    private static final String STORAGE = "students.txt";
+    private StudentManager manager;
+    private Scanner sc = new Scanner(System.in);
+
+    public StudentRecordSystem() {
+        manager = new StudentManager(STORAGE);
+    }
+
+    private void showMenu() {
+        System.out.println("===== Capstone Student Menu =====");
+        System.out.println("1. Add Student");
+        System.out.println("2. View All Students");
+        System.out.println("3. Search by Name");
+        System.out.println("4. Delete by Name");
+        System.out.println("5. Sort by Marks");
+        System.out.println("6. Update by RollNo");
+        System.out.println("7. Save and Exit");
+        System.out.print("Enter choice: ");
+    }
+
+    private void addStudentFlow() {
+        try {
+            System.out.print("Enter Roll No: ");
+            String rStr = sc.nextLine().trim();
+            int rollNo = Integer.parseInt(rStr);
+            System.out.print("Enter Name: ");
+            String name = sc.nextLine().trim();
+            if (name.isEmpty()) throw new IllegalArgumentException("Name cannot be empty");
+            System.out.print("Enter Email: ");
+            String email = sc.nextLine().trim();
+            if (email.isEmpty()) throw new IllegalArgumentException("Email cannot be empty");
+            System.out.print("Enter Course: ");
+            String course = sc.nextLine().trim();
+            if (course.isEmpty()) throw new IllegalArgumentException("Course cannot be empty");
+            System.out.print("Enter Marks: ");
+            String mStr = sc.nextLine().trim();
+            double marks = Double.parseDouble(mStr);
+
+            Student s = new Student(rollNo, name, email, course, marks);
+
+            // simulate loading
+            Loader loader = new Loader("Adding student", 200);
+            Thread t = new Thread(loader);
+            t.start();
+            // simulate some work
+            Thread.sleep(700);
+            manager.addStudent(s);
+            loader.stop();
+            t.interrupt();
+
+            System.out.println("Student added successfully.");
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid numeric input: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            System.out.println("Validation error: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("Error adding student: " + e.getMessage());
+        }
+    }
+
+    private void viewAllFlow() {
+        List<Student> all = manager.viewAllStudents();
+        if (all.isEmpty()) {
+            System.out.println("No students to show.");
+            return;
+        }
+        Iterator<Student> it = all.iterator();
+        while (it.hasNext()) {
+            Student s = it.next();
+            s.displayInfo();
+        }
+    }
+
+    private void searchFlow() {
+        System.out.print("Enter name to search: ");
+        String name = sc.nextLine().trim();
+        try {
+            Student s = manager.searchStudentByName(name);
+            System.out.println("Student Info:");
+            s.displayInfo();
+        } catch (StudentNotFoundException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private void deleteFlow() {
+        System.out.print("Enter name to delete: ");
+        String name = sc.nextLine().trim();
+        try {
+            // simulate loading
+            Loader loader = new Loader("Deleting student", 200);
+            Thread t = new Thread(loader);
+            t.start();
+            Thread.sleep(500);
+            manager.deleteStudentByName(name);
+            loader.stop();
+            t.interrupt();
+            System.out.println("Student record deleted.");
+        } catch (StudentNotFoundException e) {
+            System.out.println(e.getMessage());
+        } catch (InterruptedException e) {
+            System.out.println("Operation interrupted.");
+        }
+    }
+
+    private void sortFlow() {
+        manager.sortByMarksDesc();
+        System.out.println("Sorted Student List by Marks:");
+        viewAllFlow();
+    }
+
+    private void updateFlow() {
+        System.out.print("Enter rollNo to update: ");
+        String r = sc.nextLine().trim();
+        try {
+            int rollNo = Integer.parseInt(r);
+            manager.updateStudent(rollNo);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid roll number.");
+        } catch (StudentNotFoundException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private void saveAndExitFlow() {
+        try {
+            Loader loader = new Loader("Saving records", 150);
+            Thread t = new Thread(loader);
+            t.start();
+            Thread.sleep(800);
+            manager.saveToFile();
+            loader.stop();
+            t.interrupt();
+            System.out.println("Saved and exiting.");
+        } catch (IOException e) {
+            System.out.println("Error saving file: " + e.getMessage());
+        } catch (InterruptedException e) {
+            System.out.println("Save interrupted.");
+        }
+    }
+
+    public void run() {
+        boolean exit = false;
+        while (!exit) {
+            showMenu();
+            String choice = sc.nextLine().trim();
+            switch (choice) {
+                case "1": addStudentFlow(); break;
+                case "2": viewAllFlow(); break;
+                case "3": searchFlow(); break;
+                case "4": deleteFlow(); break;
+                case "5": sortFlow(); break;
+                case "6": updateFlow(); break;
+                case "7": saveAndExitFlow(); exit = true; break;
+                default: System.out.println("Invalid choice. Try again.");
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        StudentRecordSystem app = new StudentRecordSystem();
+        app.run();
+    }
+}
